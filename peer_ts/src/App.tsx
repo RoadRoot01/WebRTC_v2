@@ -295,11 +295,11 @@ function App() {
             console.log('[Peer] Connected to signaling server');
             if (MODE === '1_TO_N') {
                 console.log('[Peer] Joining room in 1_TO_N mode:', room);
-                socketRef.current?.emit('join', { room, type: 'mesh' });
+                socketRef.current?.emit('join', { room, type: '1_to_n' });
             }
             else if (MODE === 'MESH') {
                 console.log('[Peer] Joining room in MESH mode:', room);
-                socketRef.current?.emit('join', { room, type: '1_to_n' });
+                socketRef.current?.emit('join', { room, type: 'mesh' });
             }
         });
 
@@ -760,6 +760,40 @@ function App() {
     };
     forceDisconnectPeerRef.current = forceDisconnectPeer;
 
+    // 모든 PeerConnection을 종료하는 함수
+    const reset = useCallback(() => {
+        console.log(`[RESET] Disconnecting all ${Object.keys(pcsRef.current).length} peers...`);
+        
+        const peerIds = Object.keys(pcsRef.current);
+        let disconnectedCount = 0;
+
+        peerIds.forEach(peerId => {
+            if (forceDisconnectPeerRef.current(peerId)) {
+                disconnectedCount++;
+            }
+        });
+
+        // 로컬 미디어 스트림 정지
+        // if (localStreamRef.current) {
+        //     localStreamRef.current.getTracks().forEach(track => {
+        //         track.stop();
+        //     });
+        //     console.log('[disconnectAllPeers] Local media stream stopped');
+        // }
+
+        // pcsRef 초기화
+        pcsRef.current = {};
+        pcTypesRef.current = {};
+        pendingCandRef.current = {};
+        iceCandidateGatheredArrayRef.current = {};
+
+        // 사용자 목록 초기화
+        setUsers([]);
+
+        console.log(`[RESET] Successfully disconnected ${disconnectedCount} peers`);
+        return disconnectedCount;
+    }, []);
+
     useEffect(() => {
         // 디버그용 전역 노출
         (window as any).forceDisconnectPeer = (peerId: string) => {
@@ -768,12 +802,14 @@ function App() {
 
         // (선택) 현재 pcsRef도 보고 싶으면 같이 노출
         (window as any).pcsRef = pcsRef;
+        (window as any).disconnectAllPeers = reset;
 
         return () => {
             delete (window as any).forceDisconnectPeer;
             delete (window as any).pcsRef;
+            delete (window as any).disconnectAllPeers;
         };
-    }, []);
+    }, [reset]);
 
     return (
         <div style={{ padding: 16, fontFamily: "system-ui, sans-serif" }}>
@@ -803,6 +839,7 @@ function App() {
                     {myid}
                 </div>
                 <button onClick={() => (changeStream())}>Change Stream</button>
+                <button onClick={() => reset()} style={{ marginLeft: 8, backgroundColor: '#ff4444', color: 'white', padding: '6px 12px', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>RESET</button>
             </div>
 
 
