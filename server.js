@@ -1,9 +1,6 @@
 const fs = require('fs');
 const https = require('https');
 const express = require('express');
-// const WebSocket = require('ws');
-const path = require('path');
-
 const app = express();
 
 // HTTPS 인증서

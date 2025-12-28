@@ -49,7 +49,7 @@ const displayMediaOptions = {
 const MODE: string = 'MESH'; // '1_TO_N' or 'MESH'
 
 // 소켓 인스턴스를 컴포넌트 외부에서 한 번만 생성하여 재렌더링 시 재생성을 방지?
-export const SIGNALING_SERVER_URL = `https://192.168.0.37:8000`
+export const SIGNALING_SERVER_URL = `https://192.168.0.6:8000`
 
 // const socket = io(`https://192.168.0.8:8000`, { autoConnect: false });
 const pcConfig: RTCConfiguration = {
@@ -57,11 +57,11 @@ const pcConfig: RTCConfiguration = {
         {
             urls: [
                 'stun:stun.l.google.com:19302',
-                // 'stun:stun1.l.google.com:19302',
-                // 'stun:stun2.l.google.com:19302',
-                // 'stun:stun3.l.google.com:19302',
-                // 'stun:stun4.l.google.com:19302',
-                // 'stun:23.21.150.121:3478',
+                'stun:stun1.l.google.com:19302',
+                'stun:stun2.l.google.com:19302',
+                'stun:stun3.l.google.com:19302',
+                'stun:stun4.l.google.com:19302',
+                'stun:23.21.150.121:3478',
 
             ]
         },
@@ -93,7 +93,11 @@ function App() {
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const myidRef = useRef<string>('');
     const localStreamSortRef = useRef<string>('userMedia');
-    const hasStreamChangedRef = useRef<boolean>(false);
+    // Offerer / Answerer 구분 저장
+    const pcTypesRef = useRef<Record<string, string>>({});
+    // pc Close Test 용 버튼 
+    const forceDisconnectPeerRef = useRef<(peerId: string) => boolean>(() => false);
+
     // user 상태 관리
     const [users, setUsers] = useState<WebRTCUser[]>([]);
     const [myid, setMyid] = useState<string>('');
@@ -325,7 +329,8 @@ function App() {
                 const newSdp = setMaxBandwidth(offer.sdp || '', 'video', BITRATE); // if BITRATE = 51200 = 비디오 대역폭을 51.2Mbps로 설정
                 await pc.setLocalDescription(newSdp ? { type: offer.type, sdp: newSdp } : offer);
                 socketRef.current?.emit('offer', { to: peerid, data: newSdp ? { type: offer.type, sdp: newSdp } : offer });
-
+                // peerid에 대해서 내가 offer 보냄 -> Offerer 기록
+                pcTypesRef.current[peerid] = 'offerer';
                 console.log(`[Peer] Sent Offer to ${peerid}`, newSdp ? { type: offer.type, sdp: newSdp } : offer);
 
                 // 20명 연결 시 부하 분산을 위해 100ms 지연
@@ -354,7 +359,8 @@ function App() {
             // await pc.setLocalDescription(answer);
             // socketRef.current?.emit('answer', { to: from, data: answer });
             socketRef.current?.emit('answer', { to: from, data: newSdp ? { type: answer.type, sdp: newSdp } : answer });
-            // console.log(`[Peer] Sent Answer to ${from}`,answer);
+            // peerid에 대해서 내가 answer 보냄 -> Answerer 기록
+            pcTypesRef.current[from] = 'answerer';
             console.log(`[Peer] Sent Answer to ${from}`, newSdp ? { type: answer.type, sdp: newSdp } : answer);
         });
 
@@ -446,11 +452,7 @@ function App() {
 
         socketRef.current.on('disconnected', (peerId: string) => {
             console.log(`[Peer] Peer ${peerId} disconnected.`);
-            if (pcsRef.current[peerId]) {
-                pcsRef.current[peerId].close();
-                delete pcsRef.current[peerId];
-                setUsers(prev => prev.filter(u => u.id !== peerId));
-            }
+
         });
         /*
         return () => {
@@ -563,7 +565,16 @@ function App() {
         pc.onconnectionstatechange = async () => {
             console.log(`[${peerId}] state:`, pc.connectionState);
 
-            if (pc.connectionState === 'failed') {
+            if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                console.log(`[${peerId}] Connection ${pc.connectionState}. ${pcTypesRef.current[peerId]}Attempting renegotiate.`);
+                // 재연결 시도 join-redial for recvonly connections
+                const pcType = pcTypesRef.current[peerId];
+                // Offerer 인지 확인 후 renegotiate 
+                if (pcType === 'offerer') {
+                    renegotiateSamePc(peerId);
+                }
+            }
+            else if (pc.connectionState === 'failed') {
                 // 재연결 시도(pc.restartIce();? 하드리셋 or 소프트 리셋)
                 console.log(`[${peerId}] Connection failed. Attempting to restart ICE...`);
                 try {
@@ -584,24 +595,18 @@ function App() {
                     console.error(e);
                 }
             }
-            else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-                console.log(`[${peerId}] Connection ${pc.connectionState}. Closing peer connection.`);
-                pc.close();
-                delete pcsRef.current[peerId];
-                // candidate flush
-                pendingCandRef.current[peerId] = []
-            }
+
             else if (pc.connectionState === 'connected') {
                 console.log(`[${peerId}] Connection established successfully.changeCount:${changeCount}`);
                 if (changeCount === 0) {
-                    changeStream(); /////////////////////
+                    // changeStream(); // 스트림 교체 함수 호출 (카메라 -> 화면공유)
                     changeCount++;
                 }
-                pc.getStats().then(stats => {
-                    stats.forEach(report => {
-                        console.log(`[${peerId}] Stats Report:`, report);
-                    });
-                });
+                // pc.getStats().then(stats => {
+                //     stats.forEach(report => {
+                //         console.log(`[${peerId}] Stats Report:`, report);
+                //     });
+                // });
             }
         };
 
@@ -679,58 +684,85 @@ function App() {
         }
     };
 
-    // callback 함수로 정의 0906추가    
-    // const softReset = useCallback(async (peerid: string) => {
-    //     const pc = pcsRef.current[peerid];
-    //     if (!pc) {
-    //         console.error('RTCPeerConnection is not initialized.');
-    //         return;
-    //     }
-    //     // 추후에 로직 변경 필요
-    //     console.log(`[Peer] Soft Resetting: myid:${myidRef.current} peerid:${peerid}`);
-    //     if (myidRef.current >= peerid) {
-    //         console.log(`[Peer] I'm the offerer`);
-    //         // ICE candidate 재설정 및 재협상
-    //         // Network changed, ICE failed, Opponent requests 등  
-    //         const offer = await pc.createOffer({ iceRestart: true });
-    //         await pc.setLocalDescription(offer);
-    //         socket.emit('signal', { to: peerid, data: offer });
-    //         console.log(`[Peer] Sent Offer with ICE restart`);
-    //     }
+    const renegotiateSamePc = useCallback(async (peerId: string) => {
+        const pc = pcsRef.current[peerId];
+        const socket = socketRef.current;
+        if (!pc || !socket) return;
+        try {
 
-    // }, [socket, myid]);
+            // signalingState가 안정적일 때만 시도하는 게 안전함
+            if (pc.signalingState !== "stable") {
+                console.log(`[${peerId}] signalingState=${pc.signalingState}, waiting for stable.`);
+                // 필요하면 여기서 일정 시간 후 재시도하도록 해도 됨
+                return;
+            }
 
-    // const hardReset = useCallback(async (peerid: string) => {
-    //     console.log(`[Peer] Hard Resetting function called for peerid:${peerid}`);
-    //     // 1. 기존 피어 연결 종료
-    //     const pc = pcsRef.current[peerid];
-    //     if (!pc) {
-    //         console.error('[Peer][RESET] RTCPeerConnection is not initialized.');
-    //         return;
-    //     }
-    //     else {
-    //         console.log(`[Peer][RESET] Hard Resetting: myid:${myidRef.current} peerid:${peerid}`);
-    //         pc.close();
-    //         delete pcsRef.current[peerid];
-    //     }
-    //     // 2. setUsers에서 해당 유저 제거
-    //     setUsers(prev => prev.filter(user => user.id !== peerid))
-    //     console.log(`[Peer][RESET] Closed old connection and created new one for ${peerid}`);
+            console.log(`[${peerId}] Recreating offer (iceRestart=true) on same pc...`);
 
-    //     // 3. 새로운 피어 연결 생성
-    //     const newPc = createPeerConnection(peerid);
-    //     pcsRef.current[peerid] = newPc;
+            // 핵심: 같은 pc에서 ICE restart + offer 재생성
+            const offer = await pc.createOffer({ iceRestart: true });
 
-    //     // 4. 새로운 연결에 대해 offer/answer 교환
-    //     if (myidRef.current >= peerid) {
-    //         console.log(`[Peer][RESET] I'm the offerer`);
-    //         const offer = await newPc.createOffer();
-    //         await newPc.setLocalDescription(offer);
-    //         socket.emit('offer', { to: peerid, data: offer });
-    //         console.log(`[Peer][RESET] Sent Offer`);
-    //     }
+            // 너가 쓰던 SDP bandwidth 제한 로직 유지 가능
+            const newSdp = setMaxBandwidth(offer.sdp || '', 'video', 512000);
+            const localDesc = newSdp ? { type: offer.type, sdp: newSdp } : offer;
 
-    // }, [socket, myid, setUsers]);
+            await pc.setLocalDescription(localDesc);
+
+            // 서버로 offer 전송 (기존 이벤트명 유지)
+            socket.emit('offer', { to: peerId, data: localDesc });
+            console.log(`[${peerId}] Renegotiation offer sent.`);
+        } catch (e) {
+            console.error(`[${peerId}] renegotiation failed`, e);
+        }
+    }, []);
+
+    const forceDisconnectPeer = (peerId: string) => {
+        const pc = pcsRef.current[peerId];
+        if (!pc) {
+            console.warn(`[forceDisconnectPeer] no pc for peerId=${peerId}`);
+            return false;
+        }
+
+        try {
+            // 이벤트 핸들러 제거 (중복 cleanup/메모리 누수 방지)
+            // pc.onicecandidate = null;
+            // pc.ontrack = null;
+            // pc.onconnectionstatechange = null;
+            // pc.oniceconnectionstatechange = null;
+            // pc.onsignalingstatechange = null;
+
+            // 연결 강제 종료
+            pc.close();
+        } catch (e) {
+            console.error(`[forceDisconnectPeer] error closing pc for ${peerId}`, e);
+        }
+
+        // 레퍼런스/상태 정리
+        // delete pcsRef.current[peerId];
+        // delete pcTypesRef.current[peerId];
+        // if (pendingCandRef.current) pendingCandRef.current[peerId] = [];
+
+        // setUsers(prev => prev.filter(u => u.id !== peerId));
+
+        console.log(`[forceDisconnectPeer] disconnected peerId=${peerId}`);
+        return true;
+    };
+    forceDisconnectPeerRef.current = forceDisconnectPeer;
+
+    useEffect(() => {
+        // 디버그용 전역 노출
+        (window as any).forceDisconnectPeer = (peerId: string) => {
+            return forceDisconnectPeerRef.current(peerId);
+        };
+
+        // (선택) 현재 pcsRef도 보고 싶으면 같이 노출
+        (window as any).pcsRef = pcsRef;
+
+        return () => {
+            delete (window as any).forceDisconnectPeer;
+            delete (window as any).pcsRef;
+        };
+    }, []);
 
     return (
         <div style={{ padding: 16, fontFamily: "system-ui, sans-serif" }}>
