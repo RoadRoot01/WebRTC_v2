@@ -74,7 +74,7 @@ const config = {};
 function App() {
     console.log('Rendering... ');
     let changeCount = 0;
-    // const room = 'testRoom'; // Example room name
+    const room = 'testRoom'; // Example room name
 
     // Record<<K,T> : TS utility type
 
@@ -289,17 +289,17 @@ function App() {
         getLocalStream(); // 미디어 획득하고 시그널링과 연결 시도
         console.log('Local stream obtained:', localStreamRef.current);
 
-        const room = 'testRoom'; // Example room name    
+
 
         socketRef.current.on('connect', () => { // connect 이벤트 수신 시 
             console.log('[Peer] Connected to signaling server');
             if (MODE === '1_TO_N') {
                 console.log('[Peer] Joining room in 1_TO_N mode:', room);
-                socketRef.current?.emit('join-1_to_n', room);
+                socketRef.current?.emit('join', { room, type: 'mesh' });
             }
             else if (MODE === 'MESH') {
                 console.log('[Peer] Joining room in MESH mode:', room);
-                socketRef.current?.emit('join-mesh', room);
+                socketRef.current?.emit('join', { room, type: '1_to_n' });
             }
         });
 
@@ -563,11 +563,11 @@ function App() {
 
         // 연결 상태 모니터링
         pc.onconnectionstatechange = async () => {
-            console.log(`[${peerId}] state:`, pc.connectionState);
+            console.log(`[${peerId}]${pc.connectionState} state:`, pc.connectionState);
 
             if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-                console.log(`[${peerId}] Connection ${pc.connectionState}. ${pcTypesRef.current[peerId]}Attempting renegotiate.`);
-                // 재연결 시도 join-redial for recvonly connections
+                console.log(`[${peerId}] Connection . ${pcTypesRef.current[peerId]}Attempting renegotiate.`);
+                // 재연결 시도 join-redial for offerer connections
                 const pcType = pcTypesRef.current[peerId];
                 // Offerer 인지 확인 후 renegotiate 
                 if (pcType === 'offerer') {
@@ -575,25 +575,36 @@ function App() {
                 }
             }
             else if (pc.connectionState === 'failed') {
-                // 재연결 시도(pc.restartIce();? 하드리셋 or 소프트 리셋)
-                console.log(`[${peerId}] Connection failed. Attempting to restart ICE...`);
-                try {
-                    // console.log(`[${peerId}] Soft Resetting...`);
-                    // console.log(`[${peerId}] Hard Resetting...`);
-                    // await softReset(peerId);
-                    // candidate flush
-
-                    pendingCandRef.current[peerId] = []
-
-                    // await hardReset(peerId);
-
-                    /* 1029 추가 : 연결 실패 했을 때 담아두었던 candidate배열 다시 전송*/
-                    sendIceCandidate(peerId);
+                // 재연결 시도 Redial
+                // console.log(`[${peerId}] Connection failed. Attempting to restart ICE...`);
+                const pcType = pcTypesRef.current[peerId];
+                if (pcType === 'offerer') {
+                    try {
+                        const targetPc = pcsRef.current[peerId];
+                        console.log(`[${peerId}] offerer connection lost. Attempting redial.`);
+                        if (targetPc) {
+                            targetPc.close();
+                            delete pcsRef.current[peerId];
+                            delete pcTypesRef.current[peerId];
+                            pendingCandRef.current[peerId] = [];
+                            iceCandidateGatheredArrayRef.current[peerId] = [];
+                            setUsers(prev => prev.filter(u => u.id !== peerId));
+                        }
+                        else {
+                            console.log(`[${peerId}] No existing peer connection found for hard reset.`);
+                        }
+                        console.log(`[${peerId}] Redialing...`);
+                        socketRef.current?.emit('join', { room: room, type: 'redial', to: peerId });
+                    }
+                    catch (e) {
+                        console.error(e);
+                    }
                 }
-                catch (e) {
-                    // hardReset
-                    console.error(e);
+                else {
+                    console.log(`[${peerId}] Non-offerer connection failed. Closing peer connection.`);
+                    
                 }
+
             }
 
             else if (pc.connectionState === 'connected') {
