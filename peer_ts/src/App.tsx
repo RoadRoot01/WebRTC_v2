@@ -50,8 +50,8 @@ const displayMediaOptions = {
 
 const constraints = { // <DG> 해상도 및 프레임레이트 제약 설정 프리셋
     video: {
-        width: { ideal: 1920, max: 1920 }, // max를 1920으로 수정
-        height: { ideal: 1080, max: 1080 }, // max를 720에서 1080으로 수정
+        width: { ideal: 1280, max: 1920 }, // max를 1920으로 수정
+        height: { ideal: 720, max: 1080 }, // max를 720에서 1080으로 수정
         frameRate: { ideal: 60, max: 60 },
     },
     audio: true
@@ -69,10 +69,10 @@ const pcConfig: RTCConfiguration = {
         {
             urls: [
                 'stun:stun.l.google.com:19302',
-                // 'stun:stun1.l.google.com:19302',
-                // 'stun:stun2.l.google.com:19302',
-                // 'stun:stun3.l.google.com:19302',
-                // 'stun:stun4.l.google.com:19302',
+                'stun:stun1.l.google.com:19302',
+                'stun:stun2.l.google.com:19302',
+                'stun:stun3.l.google.com:19302',
+                'stun:stun4.l.google.com:19302',
                 // 'stun:23.21.150.121:3478',
 
             ]
@@ -86,6 +86,10 @@ const config = {};
 // const pcConfig : RTCConfiguration = {"iceServers":[]};
 function App() {
     console.log('Rendering... ');
+    // URL 파라미터에서 codec 값을 읽어와 테스트용 코덱으로 설정 (기본값 H264)
+    // 예 ) https://192.168.1.4:3000/?codec=H264
+    const codecParam = new URLSearchParams(window.location.search).get('codec');
+    const targetMimeType = codecParam ? `video/${codecParam.toUpperCase()}` : 'video/H264';
     let changeCount = 0;
     const room = 'testRoom'; // Example room name
 
@@ -147,7 +151,7 @@ function App() {
                 parameters.encodings[0].maxBitrate = bitrate;
 
                 // <DG> 해상도 우선 설정 추가 2026.01.29.
-                parameters.degradationPreference = 'maintain-resolution';
+                //parameters.degradationPreference = 'maintain-resolution';
 
                 await videoSender.setParameters(parameters);
                 console.log(`[Peer] Video bitrate for ${peerId} set to ${bitrate / 1000}bps.`);
@@ -526,6 +530,9 @@ function App() {
             const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
             pc.addTransceiver('audio', { direction: 'recvonly' });
 
+
+
+            // <코덱 설정>
             // [추가됨] 자식(수신처)이 Offer를 던질 때도 H.264를 1순위로 만들어야 함!
             if (videoTransceiver && 'setCodecPreferences' in videoTransceiver) {
                 const capabilities = RTCRtpReceiver.getCapabilities('video');
@@ -541,9 +548,39 @@ function App() {
                     }
                 }
             }
+
+
+            // <코덱 설정>
+            /*
+            // [수정됨] 단일 코덱 강제(filter)에서 최우선 순위 지정(sort) 방식으로 변경
+            if (videoTransceiver && 'setCodecPreferences' in videoTransceiver) {
+                const capabilities = RTCRtpReceiver.getCapabilities('video');
+                if (capabilities && capabilities.codecs) {
+
+                    // 전체 코덱을 유지하되, 원하는 코덱을 리스트 맨 앞으로 끌어올림
+                    const sortedCodecs = [...capabilities.codecs].sort((a, b) => {
+                        const isTargetA = a.mimeType === targetMimeType;
+                        const isTargetB = b.mimeType === targetMimeType;
+
+                        if (isTargetA && !isTargetB) return -1; // a를 앞으로
+                        if (!isTargetA && isTargetB) return 1;  // b를 앞으로
+                        return 0; // 순서 유지
+                    });
+
+                    try {
+                        // 정렬된 전체 코덱 리스트를 주입 (1순위 VP9, 실패 시 나머지 코덱 허용)
+                        videoTransceiver.setCodecPreferences(sortedCodecs);
+                        console.log(`[Peer] VP9 preference set at the top for recvonly connection`);
+                    } catch (e) {
+                        console.error('Codec preference failed for recvonly', e);
+                    }
+                }
+            }
+            */
         }
         else {
-            /* <DG> 기존 코드 주석 처리함. 2026.01.29.
+            // <DG> 기존 코드 주석 처리함. 2026.01.29.
+            /*
             if (localStreamRef.current !== null) {
                 console.log('[Peer] Add local stream to peer connection');
                 localStreamRef.current.getTracks().forEach(track => {
@@ -551,6 +588,7 @@ function App() {
                     // (내 스트림이 아닌 전달할 Stream을 담으면 됨)
                     pc.addTrack(track, localStreamRef.current!);
                 });
+            }
             */
 
             if (localStreamRef.current !== null) {
@@ -570,6 +608,8 @@ function App() {
                                 .catch(e => console.warn(`[Peer] Failed to set degradationPreference for ${peerId}`, e));
                         }
 
+                        // <코덱 설정>
+
                         // [2] 하드웨어 가속기(HW Encoder)를 무조건 깨우도록 H.264 코덱 강제 적용
                         const transceiver = pc.getTransceivers().find(t => t.sender === sender);
                         if (transceiver && 'setCodecPreferences' in transceiver) {
@@ -587,9 +627,43 @@ function App() {
                                 }
                             }
                         }
+
+
+                        // <코덱 설정>
+
+                        /*
+                        // [2] 하드웨어 가속기(HW Encoder)를 최우선으로 깨우도록 코덱 리스트 정렬
+                        const transceiver = pc.getTransceivers().find(t => t.sender === sender);
+                        if (transceiver && 'setCodecPreferences' in transceiver) {
+                            const capabilities = RTCRtpReceiver.getCapabilities('video');
+                            if (capabilities && capabilities.codecs) {
+
+                                // 컴퓨터가 지원하는 전체 코덱 리스트를 가져와 선호하는 코덱을 맨 위로 올림
+                                const sortedCodecs = [...capabilities.codecs].sort((a, b) => {
+                                    const isTargetA = a.mimeType === targetMimeType;
+                                    const isTargetB = b.mimeType === targetMimeType;
+
+                                    // a나 b가 내가 원하는 1순위인지 확인하고, 1순위인 것을 앞으로 정렬
+                                    if (isTargetA && !isTargetB) return -1;
+                                    if (!isTargetA && isTargetB) return 1;
+                                    return 0;
+                                });
+
+                                try {
+                                    // 선호 코덱 최우선 협상, 상대가 미지원 시 배열 뒤쪽의 코덱들로 폴백(Fallback) 허용
+                                    transceiver.setCodecPreferences(sortedCodecs);
+                                    console.log(`[Peer] VP9 Hardware Encoder preference sorted (Target on top) for ${peerId}`);
+                                } catch (e) {
+                                    console.error('Codec preference failed', e);
+                                }
+                            }
+                        }
+                        */
+
                     }
                 });
-            } else {
+            }
+            else {
                 console.error('Local media stream is null');
             }
 

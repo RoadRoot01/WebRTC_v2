@@ -36,7 +36,7 @@ const rooms = new Map();
 const peers = new Map();
 // broadcaster 관리용 객체(맵) (key: roomid, value: { broadcasters: {}, activeBroadcasters: {} ,allpeers: {}} )
 var listOfBroadcasts = {};
-const AVAILABLE_BROADCASTING_NUMBER = 8; // 각 중계자가 감당할 수 있는 최대 시청자 수
+const AVAILABLE_BROADCASTING_NUMBER = 50; // 각 중계자가 감당할 수 있는 최대 시청자 수
 // 디버깅용 시퀀스 넘버
 let seq = 0;
 
